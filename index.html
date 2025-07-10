@@ -172,6 +172,10 @@
             border-radius: 12px;
             box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
             background: #000;
+            /* تغییر جدید: جلوگیری از انتخاب متن/عناصر داخل پلیر با موس */
+            -webkit-user-select: none; /* Safari */
+            -ms-user-select: none; /* IE 10+ */
+            user-select: none; /* Standard syntax */
         }
 
         .plyr .plyr__captions span,
@@ -302,20 +306,15 @@
             left: 15px;
             background: rgba(0, 0, 0, 0.85);
             color: white;
-            font-size: 14px;
-            padding: 8px 16px;
-            border-radius: 20px;
+            font-size: 12px;
+            padding: 6px 12px;
+            border-radius: 15px;
             z-index: 100;
             display: none;
             pointer-events: none;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
             border: 1px solid rgba(255, 255, 255, 0.2);
             font-weight: bold;
-        }
-        
-        .speed-indicator.highlight {
-            background: linear-gradient(90deg, #ff9800, #ff5722);
-            color: #fff;
         }
 
         .back-button {
@@ -337,10 +336,12 @@
             backdrop-filter: blur(4px);
             -webkit-backdrop-filter: blur(4px);
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            transition: all 0.2s ease;
         }
         
         .back-button:hover {
             background: rgba(77, 171, 247, 0.8);
+            transform: scale(1.1);
         }
 
         .footer {
@@ -504,7 +505,6 @@
         </div>
         
         
-    </div>
 
     <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>
 
@@ -528,6 +528,7 @@
             let subtitleURL = null;
             let previousSpeed = 1;
             let isSpaceHeld = false;
+            let scrollPosition = 0; // ذخیره موقعیت اسکرول
 
             /* نمایش پیام */
             const showStatus = (msg, ok = true) => {
@@ -542,13 +543,7 @@
                 speedIndicator.textContent = `سرعت: ${speed}x`;
                 speedIndicator.style.display = 'block';
                 
-                // هایلایت برای سرعت 2x
-                if(speed === 2) {
-                    speedIndicator.classList.add('highlight');
-                } else {
-                    speedIndicator.classList.remove('highlight');
-                }
-                
+                // حذف هایلایت نارنجی
                 setTimeout(() => {
                     if(speed !== 2) {
                         speedIndicator.style.display = 'none';
@@ -750,12 +745,17 @@
             let pressTimer = null;
             let lastTapTime = 0;
             let isHolding = false;
+            
+            const isPlyrControl = (element) => {
+                return element.closest('.plyr__control') || 
+                       element.closest('.plyr__controls') || 
+                       element.closest('.plyr__volume') ||
+                       element.closest('.plyr__progress') ||
+                       element.closest('.plyr__menu');
+            };
 
             playerContainer.addEventListener('pointerdown', (e) => {
-                // اگر روی کنترل‌ها کلیک شده، کاری نکن
-                if (e.target.closest('.plyr__control')) {
-                    return;
-                }
+                if (isPlyrControl(e.target)) return;
                 
                 isHolding = false;
                 pressTimer = setTimeout(() => {
@@ -768,44 +768,34 @@
                 }, 200);
             });
 
-            playerContainer.addEventListener('pointerup', (e) => {
+            // تغییر جدید: رویداد رها کردن موس به کل داکیومنت منتقل شد
+            // این باعث می‌شود حتی اگر موس از کادر ویدیو خارج شود، با رها کردن کلیک سرعت به حالت عادی برگردد
+            document.addEventListener('pointerup', (e) => {
                 clearTimeout(pressTimer);
                 
-                // اگر روی کنترل‌ها کلیک شده، کاری نکن
-                if (e.target.closest('.plyr__control')) {
-                    return;
-                }
-
                 if (isHolding) {
                     player.speed = previousSpeed;
                     isHolding = false;
                     showSpeedIndicator(previousSpeed);
                 } else {
-                    const currentTime = new Date().getTime();
-                    const timeDifference = currentTime - lastTapTime;
+                    // فقط اگر رها کردن موس داخل پلیر بود (و روی کنترل‌ها نبود) منطق پخش/توقف اجرا شود
+                    if (playerContainer.contains(e.target) && !isPlyrControl(e.target)) {
+                        const currentTime = new Date().getTime();
+                        const timeDifference = currentTime - lastTapTime;
 
-                    if (timeDifference > 0 && timeDifference < 300) {
-                        const videoRect = playerContainer.getBoundingClientRect();
-                        if (e.clientX < videoRect.left + videoRect.width / 2) {
-                            player.rewind(10);
+                        if (timeDifference > 0 && timeDifference < 300) {
+                            const videoRect = playerContainer.getBoundingClientRect();
+                            if (e.clientX < videoRect.left + videoRect.width / 2) {
+                                player.rewind(10);
+                            } else {
+                                player.forward(10);
+                            }
+                            lastTapTime = 0;
                         } else {
-                            player.forward(10);
+                            player.togglePlay();
+                            lastTapTime = currentTime;
                         }
-                        lastTapTime = 0;
-                    } else {
-                        player.togglePlay();
-                        lastTapTime = currentTime;
                     }
-                }
-            });
-            
-            // جلوگیری از توقف ویدیو هنگام کلیک روی منوها و کنترل‌ها
-            document.addEventListener('click', (e) => {
-                if (e.target.closest('.plyr__menu__container') || 
-                    e.target.closest('.plyr__control--menu') ||
-                    e.target.closest('.plyr__control')) {
-                    e.stopPropagation();
-                    e.preventDefault();
                 }
             });
 
@@ -815,14 +805,22 @@
             });
 
             player.on('enterfullscreen', () => {
+                scrollPosition = window.scrollY;
                 if (window.matchMedia('(orientation: landscape)').matches && window.innerWidth < 900) {
                     screen.orientation.lock('landscape').catch(() => {});
                 }
             });
 
-            player.on('exitfullscreen', () => {
-                screen.orientation.unlock?.();
-            });
+         
+			player.on('exitfullscreen', () => {
+				
+				setTimeout(() => {
+					const playerContainer = document.getElementById('player-container');
+					playerContainer.scrollIntoView({ behavior: 'auto', block: 'nearest' });
+				}, 50); // یک تاخیر بسیار کوتاه برای اطمینان از اینکه صفحه کاملا از حالت تمام‌صفحه خارج شده است.
+				
+				screen.orientation.unlock?.();
+			});
             
             // نمایش سرعت فعلی در ابتدا
             showSpeedIndicator(1);

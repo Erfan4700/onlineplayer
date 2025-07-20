@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>پلیر آنلاین ویدئو با زیرنویس</title>
     <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.3/dist/hls.min.js"></script>
     <style>
         :root {
             --sub-text-color: #FFFFFF;
@@ -172,10 +173,9 @@
             border-radius: 12px;
             box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
             background: #000;
-            /* تغییر جدید: جلوگیری از انتخاب متن/عناصر داخل پلیر با موس */
-            -webkit-user-select: none; /* Safari */
-            -ms-user-select: none; /* IE 10+ */
-            user-select: none; /* Standard syntax */
+            -webkit-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
         }
 
         .plyr .plyr__captions span,
@@ -353,6 +353,31 @@
             border-top: 1px solid #444;
         }
 
+        .advanced-options {
+            display: none;
+            margin-top: 15px;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid #444;
+        }
+
+        .toggle-options {
+            background: none;
+            border: none;
+            color: #4dabf7;
+            cursor: pointer;
+            font-size: 0.9rem;
+            margin-top: 10px;
+            padding: 5px;
+            text-align: center;
+            width: 100%;
+        }
+        
+        .toggle-options:hover {
+            text-decoration: underline;
+        }
+
         @media (max-width: 767px) {
             .container {
                 padding: 15px;
@@ -414,7 +439,8 @@
             .controls-grid,
             .header,
             .controls-section,
-            .footer {
+            .footer,
+            .advanced-options {
                 display: none;
             }
             
@@ -444,7 +470,7 @@
         <div class="input-section">
             <div class="input-group">
                 <label for="video-url">لینک ویدئو (mp4, mkv, ...)</label>
-                <input type="url" id="video-url" placeholder="https://example.com/video.mp4">
+                <input type="url" id="video-url" placeholder="https://example.com/video.mp4" value="">
             </div>
 
             <div class="input-group">
@@ -454,6 +480,28 @@
                     <label for="subtitle-file" class="file-label">
                         انتخاب فایل...
                         <span id="file-name">هیچ فایلی انتخاب نشده</span>
+                    </label>
+                </div>
+            </div>
+
+            <button class="toggle-options" id="toggle-options">نمایش تنظیمات پیشرفته</button>
+            
+            <div class="advanced-options" id="advanced-options">
+                <div class="input-group">
+                    <label for="content-type">نوع محتوا (اگر خودکار کار نکرد)</label>
+                    <select id="content-type">
+                        <option value="auto" selected>تشخیص خودکار</option>
+                        <option value="video/mp4">MP4 (video/mp4)</option>
+                        <option value="video/webm">WebM (video/webm)</option>
+                        <option value="video/ogg">OGG (video/ogg)</option>
+                        <option value="application/x-mpegURL">HLS (application/x-mpegURL)</option>
+                    </select>
+                </div>
+                
+                <div class="input-group">
+                    <label>
+                        <input type="checkbox" id="use-cors-proxy">
+                        استفاده از پروکسی CORS (برای حل مشکل دسترسی)
                     </label>
                 </div>
             </div>
@@ -504,7 +552,9 @@
             </div>
         </div>
         
-        
+        <div class="footer">
+            <p>پلیر پیشرفته با قابلیت پخش انواع لینک‌های ویدئویی | نسخه 2.0</p>
+        </div>
 
     <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>
 
@@ -524,11 +574,16 @@
             const statusMsg     = document.getElementById('status-message');
             const backBtn        = document.getElementById('back-button');
             const speedIndicator = document.getElementById('speed-indicator');
+            const toggleOptions  = document.getElementById('toggle-options');
+            const advancedOptions = document.getElementById('advanced-options');
+            const contentTypeSel = document.getElementById('content-type');
+            const corsProxyCheck = document.getElementById('use-cors-proxy');
 
             let subtitleURL = null;
             let previousSpeed = 1;
             let isSpaceHeld = false;
-            let scrollPosition = 0; // ذخیره موقعیت اسکرول
+            let scrollPosition = 0;
+            let hls = null;
 
             /* نمایش پیام */
             const showStatus = (msg, ok = true) => {
@@ -543,7 +598,6 @@
                 speedIndicator.textContent = `سرعت: ${speed}x`;
                 speedIndicator.style.display = 'block';
                 
-                // حذف هایلایت نارنجی
                 setTimeout(() => {
                     if(speed !== 2) {
                         speedIndicator.style.display = 'none';
@@ -633,8 +687,11 @@
                 reader.readAsText(file, 'UTF-8');
             };
 
+            // ================================================================
+            // ===== بهبود: پشتیبانی از لینک‌های خاص با استفاده از HLS.js و تنظیمات پیشرفته =====
+            // ================================================================
             loadButton.addEventListener('click', () => {
-                const url = videoUrlInput.value.trim();
+                let url = videoUrlInput.value.trim();
                 if (!url) {
                     showStatus('لطفاً لینک ویدئو را وارد کنید.', false);
                     return;
@@ -643,30 +700,63 @@
                 const subFile = subtitleInput.files[0];
                 let dummyTrack = null;
                 
-                if (subFile) {
-                    if (subtitleURL) URL.revokeObjectURL(subtitleURL);
-                    const blob = new Blob(['WEBVTT'], {type: 'text/vtt'});
-                    dummyTrack = URL.createObjectURL(blob);
+                // استفاده از پروکسی CORS در صورت انتخاب کاربر
+                if (corsProxyCheck.checked) {
+                    url = `https://corsproxy.io/?${encodeURIComponent(url)}`;
                 }
                 
-                player.source = {
-                    type: 'video',
-                    title: 'ویدئوی شما',
-                    sources: [{ src: url }],
-                    tracks: dummyTrack ? [{
-                        kind: 'captions',
-                        label: 'فارسی',
-                        srclang: 'fa',
-                        src: dummyTrack,
-                        default: true
-                    }] : []
-                };
-                
-                if (subFile) {
-                    player.once('canplay', () => loadSubtitleFile(subFile));
+                // پاک کردن پلیر فعلی
+                if (hls) {
+                    hls.destroy();
+                    hls = null;
                 }
                 
-                player.play();
+                // تعیین نوع محتوا
+                const contentType = contentTypeSel.value;
+                
+                if (contentType === 'application/x-mpegURL' || url.includes('.m3u8')) {
+                    // استفاده از HLS.js برای استریم‌های HLS
+                    if (Hls.isSupported()) {
+                        hls = new Hls();
+                        hls.loadSource(url);
+                        hls.attachMedia(player.media);
+                        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                            player.play();
+                        });
+                        hls.on(Hls.Events.ERROR, (event, data) => {
+                            showStatus(`خطای HLS: ${data.type} - ${data.details}`, false);
+                        });
+                    } else if (player.media.canPlayType('application/vnd.apple.mpegurl')) {
+                        // پشتیبانی مرورگر از HLS بومی
+                        player.source = {
+                            type: 'video',
+                            sources: [{
+                                src: url,
+                                type: 'application/x-mpegURL'
+                            }]
+                        };
+                        player.play();
+                    } else {
+                        showStatus('مرورگر شما از پخش این نوع فایل پشتیبانی نمی‌کند', false);
+                    }
+                } else {
+                    // پخش فایل‌های معمولی ویدئو
+                    const type = contentType === 'auto' ? '' : contentType;
+                    
+                    player.source = {
+                        type: 'video',
+                        sources: [{
+                            src: url,
+                            type: type
+                        }]
+                    };
+                    
+                    if (subFile) {
+                        player.once('canplay', () => loadSubtitleFile(subFile));
+                    }
+                    
+                    player.play();
+                }
             });
 
             subtitleInput.addEventListener('change', e => {
@@ -681,6 +771,46 @@
                     fileNameSpan.textContent = 'هیچ فایلی انتخاب نشده';
                     fileNameSpan.style.color = '#a0a0a0';
                 }
+            });
+
+            // ================================================================
+            // ===== مدیریت رویداد خطا =====
+            // ================================================================
+            player.on('error', event => {
+                const error = player.media.error;
+                let message = 'خطا در پخش ویدئو: ';
+                
+                if (error) {
+                    switch(error.code) {
+                        case 1:
+                            message += 'درخواست لغو شد';
+                            break;
+                        case 2:
+                            message += 'مشکل شبکه';
+                            break;
+                        case 3:
+                            message += 'خطا در بارگذاری ویدئو';
+                            break;
+                        case 4:
+                            message += 'فرمت ویدئو پشتیبانی نمی‌شود';
+                            break;
+                        default:
+                            message += 'خطای ناشناخته';
+                    }
+                } else {
+                    message += 'لطفاً لینک را بررسی کنید';
+                }
+                
+                showStatus(message, false);
+            });
+
+            // ================================================================
+            // ===== مدیریت تنظیمات پیشرفته =====
+            // ================================================================
+            toggleOptions.addEventListener('click', () => {
+                advancedOptions.style.display = advancedOptions.style.display === 'none' ? 'block' : 'none';
+                toggleOptions.textContent = advancedOptions.style.display === 'none' ? 
+                    'نمایش تنظیمات پیشرفته' : 'پنهان کردن تنظیمات پیشرفته';
             });
 
             const root = document.documentElement.style;
@@ -768,8 +898,6 @@
                 }, 200);
             });
 
-            // تغییر جدید: رویداد رها کردن موس به کل داکیومنت منتقل شد
-            // این باعث می‌شود حتی اگر موس از کادر ویدیو خارج شود، با رها کردن کلیک سرعت به حالت عادی برگردد
             document.addEventListener('pointerup', (e) => {
                 clearTimeout(pressTimer);
                 
@@ -778,7 +906,6 @@
                     isHolding = false;
                     showSpeedIndicator(previousSpeed);
                 } else {
-                    // فقط اگر رها کردن موس داخل پلیر بود (و روی کنترل‌ها نبود) منطق پخش/توقف اجرا شود
                     if (playerContainer.contains(e.target) && !isPlyrControl(e.target)) {
                         const currentTime = new Date().getTime();
                         const timeDifference = currentTime - lastTapTime;
@@ -811,16 +938,14 @@
                 }
             });
 
-         
-			player.on('exitfullscreen', () => {
-				
-				setTimeout(() => {
-					const playerContainer = document.getElementById('player-container');
-					playerContainer.scrollIntoView({ behavior: 'auto', block: 'nearest' });
-				}, 50); // یک تاخیر بسیار کوتاه برای اطمینان از اینکه صفحه کاملا از حالت تمام‌صفحه خارج شده است.
-				
-				screen.orientation.unlock?.();
-			});
+            player.on('exitfullscreen', () => {
+                setTimeout(() => {
+                    const playerContainer = document.getElementById('player-container');
+                    playerContainer.scrollIntoView({ behavior: 'auto', block: 'nearest' });
+                }, 50);
+                
+                screen.orientation.unlock?.();
+            });
             
             // نمایش سرعت فعلی در ابتدا
             showSpeedIndicator(1);
